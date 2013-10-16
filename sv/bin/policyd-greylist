@@ -1,0 +1,151 @@
+#!/usr/bin/python
+
+## tkooda : 2008-04-11 : pypolicyd-greylist : python postfix policy daemon to greylist unseen ip/mailfrom/rcptto tuples
+
+# NOTES:
+# - need to store: initial attempt date (to know when "delayed long enough"; mtime)
+# - need to store: latest attempt date (to allow tuple to "stay alive" (bypassing greylisting) from "cleanup" script; atime)
+
+
+import os
+import sys
+import re
+import stat
+import hashlib
+import time
+
+
+# set defaults..
+settings = {
+	"PROGNAME" : "policyd-greylist",
+	"CACHEDIR" : "/dev/shm/policyd-greylist",
+	"SECONDS" : 60 * 120,
+}
+
+def info( msg, desc="info" ):
+	print >>sys.stderr, "%s: %s: pid %d : %s" % ( settings["PROGNAME"], desc, os.getpid(), msg )
+	sys.stderr.flush()
+
+def warn( msg ):
+	info( msg, "warn" )
+
+def bail( act, infostr="" ):
+	extra = ""
+	if infostr:
+		extra = " : info=%s" % infostr
+	info( "%s: action=%s%s" % ( args, act, extra ) )
+	sys.stderr.flush()
+	sys.stdout.write( "action=%s\n\n" % act )
+	sys.stdout.flush()
+	sys.exit( 0 )
+
+
+# optionally override defaults
+for s in settings.keys():
+	e = os.getenv( s )
+	if e:
+		settings[ s ] = e
+
+var_sender = False
+var_recipt = False
+var_ip = False
+args = ""
+line = sys.stdin.readline()
+while line:
+	if len( line ) < 2:
+		break
+#	print >>sys.stderr, "DEBUG: line:", line ,
+	line = line.rstrip( "\n" )
+	args += line + ", "
+	## tkooda : 2008-04-23 : FIXME: check line length before referencing it
+	if line[:7] == "sender=":
+		var_sender = line[7:].lower()
+	elif line[:10] == "recipient=":
+		var_recipt = line[10:].lower()
+	elif line[:15] == "client_address=":
+		var_ip = line[15:].lower()
+	line = sys.stdin.readline()
+
+#print >>sys.stderr, "DEBUG: args: %s" % args
+#print >>sys.stderr, "DEBUG: from:", var_sender
+#print >>sys.stderr, "DEBUG: to:", var_recipt
+
+# validate args ..
+if not var_sender:
+   bail( "dunno", "missing_sender" )
+if not var_recipt:
+   bail( "dunno", "missing_recipient" )
+
+if "/" in var_recipt: # dosn't catch unicode chars?? -use regex-valid instead?
+   bail( "dunno", "invalid_recipient" )
+
+ud = var_recipt.split( "@" )
+
+if len( ud ) != 2:
+   bail( "dunno", "recipient_has_multiple_users" )
+
+var_recipt_user = ud[0]
+var_recipt_domain = ud[1]
+
+h = hashlib.sha1( "%s:%s:%s" % ( var_ip, var_sender, var_recipt ) ).hexdigest()
+
+path_hash_dir = os.path.join( settings[ "CACHEDIR" ], h[0], h[1] )
+path_hash_file = os.path.join( path_hash_dir, h )
+
+# make parent cache dirs (must be initial greylisting)..
+if not os.path.isdir( path_hash_dir ):
+	try:
+		os.makedirs( path_hash_dir )
+	except:
+		bail( "dunno", "makedirs_failed: %s" % path_hash_dir )
+
+# new initial greylisting..
+if not os.path.isfile( path_hash_file ):
+	try:
+		fd = os.open( path_hash_file, os.O_CREAT )
+		os.close( fd )
+	except:
+		bail( "dunno", "create_failed: %s" % path_hash_file )
+	bail( "defer", "greylisted: initial : hash=%s" % h )
+	# XXX FIXME: set 4xx string to indicate greylisting (for at least abuse/postmaster/mailer-daemon)
+
+# hash file already exists, fetch it's atime/mtime to decide..
+try:
+	s = os.stat( path_hash_file )
+	time_first = s[stat.ST_MTIME]
+	time_last = s[stat.ST_ATIME]
+except:
+	bail( "dunno", "stat_failed: %s" % path_hash_file )
+
+now = int( time.time() )
+
+# indicate recent attempt by setting atime ("greylist 'pass' keepalive")..
+try:
+	os.utime( path_hash_file, ( now, time_first ) )
+except:
+	bail( "dunno", "utime_failed: %s, hash=%s" % ( path_hash_file, h ) )
+
+# greylist if not old enough..
+if time_first + int( settings[ "SECONDS" ] ) > now:
+	bail( "defer", "greylisted: first=%d, last=%d, remaining=%d, hash=%s" \
+		  % ( time_first, time_last, time_first + int( settings[ "SECONDS" ] ) - now, h ) )
+	# XXX FIXME: set 4xx string to indicate greylisting (for at least abuse/postmaster/mailer-daemon)
+
+# don't greylist this message..
+#info( "accepted: first=%d, last=%d, hash=%s" % ( time_first, time_last, h ) )
+bail( "dunno", "passed-greylisting: first=%d, last=%d, hash=%s" % ( time_first, time_last, h ) )
+
+
+
+## FIXME: ????
+#X first attempt: touch atime+mtime
+#X more deferred attempts: touch atime
+#X any success passthrough: touch atime (when mtime is old enough)
+
+# cleanup: find where mtime is old enough AND atime is not recent enough (meaning they haven't sent a message recent enough to avoid the greylisting)
+
+
+# - greylist from (initial) "unseen state" (nofile), until "seen long enough" (mtime), and "atime is recent enough"
+# - must keep sending "freqent enough" in order to matter
+# 
+

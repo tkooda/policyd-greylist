@@ -1,0 +1,7 @@
+#!/bin/bash
+exec 2>&1
+exec chpst -e ./env/ sh -c '
+  test -f "${CACHEDIR}" || { mkdir -p -m700 "${CACHEDIR}"; chown greylist "${CACHEDIR}"; } || exit 1
+  exec tcpsvd -l0 -ugreylist -c1 -E 127.0.0.1 "${PORT}" \
+    ./bin/policyd-greylist
+'
