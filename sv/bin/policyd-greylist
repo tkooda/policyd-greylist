@@ -6,6 +6,8 @@
 # - need to store: initial attempt date (to know when "delayed long enough"; mtime)
 # - need to store: latest attempt date (to allow tuple to "stay alive" (bypassing greylisting) from "cleanup" script; atime)
 
+## tkooda : 2008-04-24 : modify to "let existing/valid addresses pass through this greylist", so that only non-existant addresses get greylisted for ~3-4 days to give me a chance to add them before they're permanently rejected
+
 
 import os
 import sys
@@ -86,6 +88,15 @@ if len( ud ) != 2:
 
 var_recipt_user = ud[0]
 var_recipt_domain = ud[1]
+
+###########
+## tkooda : 2008-04-24 : modify to "let existing/valid addresses pass through this greylist", so that only non-existant addresses get greylisted for ~3-4 days to give me a chance to add them before they're permanently rejected
+# check for user prefs ..
+path_user = os.path.join( "/etc/postfix/vmap/enabled", var_recipt_domain, var_recipt_user )
+if os.path.isdir( path_user ):
+	bail( "dunno", "found_user_prefs: %s" % path_user )
+###########	 
+
 
 h = hashlib.sha1( "%s:%s:%s" % ( var_ip, var_sender, var_recipt ) ).hexdigest()
 
