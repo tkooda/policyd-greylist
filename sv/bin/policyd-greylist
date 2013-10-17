@@ -1,12 +1,22 @@
 #!/usr/bin/python
 
-## tkooda : 2008-04-11 : pypolicyd-greylist : python postfix policy daemon to greylist unseen ip/mailfrom/rcptto tuples
+## policyd-greylist : v0.1
 
-# NOTES:
-# - need to store: initial attempt date (to know when "delayed long enough"; mtime)
-# - need to store: latest attempt date (to allow tuple to "stay alive" (bypassing greylisting) from "cleanup" script; atime)
+## http://devsec.org/software/policyd-greylist/
 
-## tkooda : 2008-04-24 : modify to "let existing/valid addresses pass through this greylist", so that only non-existant addresses get greylisted for ~3-4 days to give me a chance to add them before they're permanently rejected
+## policyd-greylist is a postfix policy daemon written in python that can
+## be used to greylist unseen ip/mailfrom/rcptto 3-tuples.
+##
+## It can be used by running it like this:
+##
+##   tcpsvd -l0 -c1 -E 127.0.0.1 8895 ./policyd-greylist
+##
+## ..and then adding it to your postfix main.cf config like this:
+##
+##   smtpd_recipient_restrictions = ... , inet:127.0.0.1:8895 , ...
+##
+## - Thor Kooda
+##   2008-04-11
 
 
 import os
@@ -56,7 +66,6 @@ line = sys.stdin.readline()
 while line:
 	if len( line ) < 2:
 		break
-#	print >>sys.stderr, "DEBUG: line:", line ,
 	line = line.rstrip( "\n" )
 	args += line + ", "
 	## tkooda : 2008-04-23 : FIXME: check line length before referencing it
@@ -67,10 +76,6 @@ while line:
 	elif line[:15] == "client_address=":
 		var_ip = line[15:].lower()
 	line = sys.stdin.readline()
-
-#print >>sys.stderr, "DEBUG: args: %s" % args
-#print >>sys.stderr, "DEBUG: from:", var_sender
-#print >>sys.stderr, "DEBUG: to:", var_recipt
 
 # validate args ..
 if not var_sender:
@@ -88,15 +93,6 @@ if len( ud ) != 2:
 
 var_recipt_user = ud[0]
 var_recipt_domain = ud[1]
-
-###########
-## tkooda : 2008-04-24 : modify to "let existing/valid addresses pass through this greylist", so that only non-existant addresses get greylisted for ~3-4 days to give me a chance to add them before they're permanently rejected
-# check for user prefs ..
-path_user = os.path.join( "/etc/postfix/vmap/enabled", var_recipt_domain, var_recipt_user )
-if os.path.isdir( path_user ):
-	bail( "dunno", "found_user_prefs: %s" % path_user )
-###########	 
-
 
 h = hashlib.sha1( "%s:%s:%s" % ( var_ip, var_sender, var_recipt ) ).hexdigest()
 
@@ -143,20 +139,5 @@ if time_first + int( settings[ "SECONDS" ] ) > now:
 	# XXX FIXME: set 4xx string to indicate greylisting (for at least abuse/postmaster/mailer-daemon)
 
 # don't greylist this message..
-#info( "accepted: first=%d, last=%d, hash=%s" % ( time_first, time_last, h ) )
 bail( "dunno", "passed-greylisting: first=%d, last=%d, hash=%s" % ( time_first, time_last, h ) )
-
-
-
-## FIXME: ????
-#X first attempt: touch atime+mtime
-#X more deferred attempts: touch atime
-#X any success passthrough: touch atime (when mtime is old enough)
-
-# cleanup: find where mtime is old enough AND atime is not recent enough (meaning they haven't sent a message recent enough to avoid the greylisting)
-
-
-# - greylist from (initial) "unseen state" (nofile), until "seen long enough" (mtime), and "atime is recent enough"
-# - must keep sending "freqent enough" in order to matter
-# 
 
